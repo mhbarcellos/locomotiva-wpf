@@ -3,32 +3,80 @@ using System.Windows;
 using System.Windows.Media.Animation;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace TrabalhoC1
 {
     public partial class MainWindow : Window
     {
-        private const double WheelRadius = 40.0;
+        private const double StageW = 1000;
+        private const double StageH = 420;
+
+        private const double WheelRadius = 40.0;   // roda 80x80
         private const double CrankRadius = 20.0;
         private const double WheelAngularPeriodSec = 2.0;
+
+        private const double RailTopY = 354;
 
         private DateTime _t0;
         private Storyboard? _moveStoryboard;
         private Storyboard? _rotStoryboard;
 
+        private readonly DispatcherTimer _smokeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(160) };
+        private readonly Random _rng = new Random();
+
         public MainWindow()
         {
             InitializeComponent();
             Loaded += OnLoaded;
-            SizeChanged += (_, __) => BuildMoveStoryboard();
+            SizeChanged += (_, __) => RebuildAnimations(); // Viewbox cuida do scale; só refaz range.
         }
 
-        private void OnLoaded(object sender, RoutedEventArgs e)
+        private void OnLoaded(object? sender, RoutedEventArgs e)
         {
-            _t0 = DateTime.Now;
+            DrawSleepers();
+            AlignLocoOnTopRail();   // roda encostando no trilho
             BuildRotationStoryboard();
             BuildMoveStoryboard();
             CompositionTarget.Rendering += OnFrame;
+
+            _smokeTimer.Tick += (_, __) => EmitSmoke();
+            _smokeTimer.Start();
+        }
+
+        private void DrawSleepers()
+        {
+            TrackCanvas.Children.Clear();
+
+            var sleeperBrush = new SolidColorBrush(Color.FromRgb(0x6B, 0x5B, 0x53));
+            double spacing = 24;
+            double sleeperWidth = 20;
+            double sleeperHeight = 50;
+            double topMargin = RailTopY - 4 - 50; 
+
+            for (double x = 0; x < StageW + spacing; x += spacing)
+            {
+                var sleeper = new Rectangle
+                {
+                    Width = sleeperWidth,
+                    Height = sleeperHeight,
+                    RadiusX = 3,
+                    RadiusY = 3,
+                    Fill = sleeperBrush
+                };
+                Canvas.SetLeft(sleeper, x);
+                Canvas.SetTop(sleeper, topMargin);
+                TrackCanvas.Children.Add(sleeper);
+            }
+        }
+
+        private void AlignLocoOnTopRail()
+        {
+            double wheelBottomLocal = 100 + (WheelRadius * 2); // 180
+            double desiredTop = RailTopY - wheelBottomLocal;
+
+            Canvas.SetTop(LocoCanvas, desiredTop);
         }
 
         private void BuildRotationStoryboard()
@@ -36,20 +84,8 @@ namespace TrabalhoC1
             _rotStoryboard?.Stop();
             _rotStoryboard = new Storyboard();
 
-            var rot1 = new DoubleAnimation
-            {
-                From = 0,
-                To = 360,
-                Duration = TimeSpan.FromSeconds(WheelAngularPeriodSec),
-                RepeatBehavior = RepeatBehavior.Forever
-            };
-            var rot2 = new DoubleAnimation
-            {
-                From = 180,
-                To = 540,
-                Duration = TimeSpan.FromSeconds(WheelAngularPeriodSec),
-                RepeatBehavior = RepeatBehavior.Forever
-            };
+            var rot1 = new DoubleAnimation { From = 0, To = 360, Duration = TimeSpan.FromSeconds(WheelAngularPeriodSec), RepeatBehavior = RepeatBehavior.Forever };
+            var rot2 = new DoubleAnimation { From = 180, To = 540, Duration = TimeSpan.FromSeconds(WheelAngularPeriodSec), RepeatBehavior = RepeatBehavior.Forever };
 
             Storyboard.SetTarget(rot1, Wheel1Rotate);
             Storyboard.SetTargetProperty(rot1, new PropertyPath(RotateTransform.AngleProperty));
@@ -66,8 +102,8 @@ namespace TrabalhoC1
             _moveStoryboard?.Stop();
             _moveStoryboard = new Storyboard();
 
-            const double margin = 20;
-            var maxX = Math.Max(0, ActualWidth - LocoCanvas.Width - margin * 2);
+            double margin = 40;
+            double maxX = Math.Max(0, StageW - LocoCanvas.Width - margin * 2);
 
             var move = new DoubleAnimation
             {
@@ -79,11 +115,16 @@ namespace TrabalhoC1
                 EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
             };
 
-            Storyboard.SetTarget(move, LocoTranslate);
-            Storyboard.SetTargetProperty(move, new PropertyPath(TranslateTransform.XProperty));
+            Storyboard.SetTarget(move, LocoCanvas);
+            Storyboard.SetTargetProperty(move, new PropertyPath("(Canvas.Left)"));
 
             _moveStoryboard.Children.Add(move);
             _moveStoryboard.Begin(this, true);
+        }
+
+        private void RebuildAnimations()
+        {
+            BuildMoveStoryboard();
         }
 
         private void OnFrame(object? sender, EventArgs e)
@@ -106,11 +147,49 @@ namespace TrabalhoC1
 
             CrankArm2.X1 = c2.X; CrankArm2.Y1 = c2.Y;
             CrankArm2.X2 = p2.X; CrankArm2.Y2 = p2.Y;
+        }
 
-            Canvas.SetLeft(Pin1, p1.X - Pin1.Width / 2);
-            Canvas.SetTop(Pin1, p1.Y - Pin1.Height / 2);
-            Canvas.SetLeft(Pin2, p2.X - Pin2.Width / 2);
-            Canvas.SetTop(Pin2, p2.Y - Pin2.Height / 2);
+        private void EmitSmoke()
+        {
+            var chimneyLocal = new Point(80, 10);
+            var toStage = LocoCanvas.TransformToVisual(EffectsLayer);
+            var p = toStage.Transform(chimneyLocal);
+
+            double size = 10 + _rng.NextDouble() * 10;
+            var puff = new Ellipse
+            {
+                Width = size,
+                Height = size,
+                Fill = new SolidColorBrush(Color.FromArgb(180, 255, 255, 255)),
+                Stroke = new SolidColorBrush(Color.FromArgb(120, 200, 200, 200)),
+                StrokeThickness = 1,
+                RenderTransformOrigin = new Point(0.5, 0.5)
+            };
+
+            var tg = new TransformGroup();
+            var tt = new TranslateTransform(p.X - size / 2, p.Y - size / 2);
+            var st = new ScaleTransform(1, 1);
+            tg.Children.Add(st);
+            tg.Children.Add(tt);
+            puff.RenderTransform = tg;
+
+            EffectsLayer.Children.Add(puff);
+
+            double driftX = (_rng.NextDouble() - 0.5) * 40;
+            double rise = 70 + _rng.NextDouble() * 40;
+            double dur = 1.4 + _rng.NextDouble() * 0.6;
+
+            var animX = new DoubleAnimation(tt.X, tt.X + driftX, TimeSpan.FromSeconds(dur));
+            var animY = new DoubleAnimation(tt.Y, tt.Y - rise, TimeSpan.FromSeconds(dur));
+            var animScale = new DoubleAnimation(1, 1.8, TimeSpan.FromSeconds(dur));
+            var animOpacity = new DoubleAnimation(1, 0, TimeSpan.FromSeconds(dur));
+            animOpacity.Completed += (_, __) => EffectsLayer.Children.Remove(puff);
+
+            puff.BeginAnimation(OpacityProperty, animOpacity);
+            st.BeginAnimation(ScaleTransform.ScaleXProperty, animScale);
+            st.BeginAnimation(ScaleTransform.ScaleYProperty, animScale);
+            tt.BeginAnimation(TranslateTransform.XProperty, animX);
+            tt.BeginAnimation(TranslateTransform.YProperty, animY);
         }
     }
 }
